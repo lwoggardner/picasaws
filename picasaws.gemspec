@@ -18,9 +18,12 @@ Gem::Specification.new do |gem|
   gem.require_paths = ["lib"]
 
   gem.add_dependency("picasa")
-  gem.add_dependency("ffi-xattr")
   gem.add_dependency("thor")
-  #gem.add_dependency("exifr")
-  #gem.add_dependency("xmp")
+  gem.add_dependency("mime-types")
+  gem.add_development_dependency("rmagick")
+  gem.add_development_dependency("exifr")
+  gem.add_development_dependency("xmp")
+  gem.add_development_dependency("rfusefs")
+  gem.add_development_dependency("ffi-xattr")
   
 end

@@ -1,3 +1,3 @@
 module PicasaWS
-  VERSION = "0.0.1"
+  VERSION = "0.0.1RC0"
 end

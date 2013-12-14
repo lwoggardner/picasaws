@@ -1,13 +1,15 @@
-require 'ffi-xattr'
 require 'picasa'
+require 'picasaws/config'
 
 module PicasaWS
     class Album
 
-        XATTR_ALBUMID="user.picasa.albumid"
-        XATTR_DESC="user.picasa.summary"
-
-        AlbumData = Struct.new("AlbumData",:title,:comment)
+        AlbumData = Struct.new(:title, :timestamp, :comment) do
+            def self.create(from_hash)
+                args = members.collect() { |m| from_hash[m] }
+                self.new(*args)
+            end
+        end
 
         attr_reader :id, :dir,:album, :dir_data, :album_data
 
@@ -15,23 +17,27 @@ module PicasaWS
             @albums ||= Hash.new() { |h,k| h[k] = Album.new(k)}
         end
 
-        def self.find_directory(dir)
-            xattr = Xattr.new(dir)
-            title = File.basename(dir)
-            id = xattr[XATTR_ALBUMID] || title
-            comment = xattr[XATTR_DESC] || ""
-            self.set[id].set_dir(dir,AlbumData.new(title,comment))
-            self.set[id]
+        def self.from_directory(dir)
+            values = Config.__album_data__(dir)
+            values[:timestamp] = values[:timestamp].to_i if values[:timestamp]           
+            values[:title] = values[:title].to_s 
+            values[:comment] = values[:comment].to_s 
+            id = values[:id]
+            if id
+                self.set[id].set_dir(dir,AlbumData.create(values))
+                self.set[id]
+            end
         end
 
-        def self.find_album(web_album)
+        def self.from_album(web_album)
             summary = web_album.summary
-            parsed =  summary.match(/\(rps:(.+)\)/)
+            parsed =  summary.match(/\s*\(#{Config.sync_id}:(.+)\)/)
             if parsed
                 id = parsed[1]
                 title   = web_album.title
+                timestamp = web_album.timestamp.to_i
                 comment = parsed.pre_match
-                self.set[id].set_album(web_album,AlbumData.new(title,comment))
+                self.set[id].set_album(web_album,AlbumData.new(title,timestamp,comment))
                 self.set[id] 
             else
                 #Not an RPS synced album
@@ -70,13 +76,14 @@ module PicasaWS
         end
 
         def comment_to_summary
-            "#{dir_data.comment} (rps:#{id})"
+            "#{dir_data.comment} (#{Config.sync_id}:#{id})"
         end
 
         def create(picasa)
             @album = picasa.album.create(
                 :title => dir_data.title,
                 :summary => comment_to_summary,
+                :timestamp => dir_data.timestamp,
                 :access => "private"
             )
             @album_data = dir_data
@@ -87,6 +94,7 @@ module PicasaWS
             @album = picasa.album.update(
                 album.id,
                 :title => dir_data.title,
+                :timestamp => dir_data.timestamp,
                 :summary => comment_to_summary
             )
             @album_data = dir_data
@@ -98,31 +106,49 @@ module PicasaWS
             @album = nil
             @album_data = nil
         end
+
+        def to_fuse
+            xattr = {}
+            dir_data.each_pair{ |k,v| xattr["user.#{k}"] = v.to_s }
+            [ "/#{dir_data.title}" , {:xattr => xattr} ]
+        end
     end
 
     class Image
         attr_reader :id, :album_id, :file, :file_data, :photo, :photo_data
 
-        ImageData = Struct.new("ImageData",:album_id, :timestamp, :comment,:keywords)
-
-        XATTR_CAPTION="user.caption"
-        XATTR_KEYWORDS="user.keywords"
+        ImageData = Struct.new(:album_id, :timestamp, :caption, :keywords) do
+            def self.create(hash)
+                args = members.collect() { |m| hash[m] }
+                self.new(*args)
+            end
+        end
 
         def self.set
             @images ||= Hash.new() { |h,k| h[k] = Image.new(k)}
         end
 
-        def self.find_file(album_id, path)
-            xattr = Xattr.new(path)
-            id = File.basename(path,".*")
-            timestamp = File.mtime(path).to_i
-            comment = xattr[XATTR_CAPTION] || ""
-            keywords = parse_keywords(xattr[XATTR_KEYWORDS])
-            self.set[id].set_file(path,ImageData.new(album_id,timestamp,comment,keywords))
-            self.set[id]
+        # id(title), caption,, keywords and timestamp
+        # id should be unique for image data
+        def self.from_file(album_id, path)
+
+            values = Config.__file_data__(path)
+
+            id = values[:id]
+            if id
+                values[:timestamp] = values[:timestamp].to_i if values[:timestamp]
+                values[:caption] = values[:caption].to_s 
+                values[:keywords] = self.parse_keywords(values[:keywords]) 
+                data = ImageData.create(values)
+                data.album_id = album_id
+
+                image = self.set[id]
+                image.set_file(path, data)
+                image
+            end
         end
 
-        def self.find_photo(album_id, photo)
+        def self.from_photo(album_id, photo)
             id = photo.title
             timestamp = photo.timestamp.to_i
             comment = photo.summary
@@ -132,8 +158,13 @@ module PicasaWS
         end
 
         def self.parse_keywords(str)
-            return "" unless str
-            str.split(/, */).sort
+            return [] unless str
+            case str
+            when Array
+                str.collect { |k| k.to_s }
+            else
+                str.split(/, */)
+            end.sort
         end
 
         def initialize(id)
@@ -163,22 +194,27 @@ module PicasaWS
             when photo.nil? && !Album.set[file_data.album_id].album
                 [:wait_album_create, nil]
             when photo.nil?
-                [:create, "Creating image #{id} in #{Album.set[file_Data.album_id].album_data.title}"]
+                [:create, "Creating image #{id} in #{Album.set[file_data.album_id].album_data.title}"]
             when !file_data.eql?(photo_data)
                 [:sync, "Synchronising image #{id}\n - file #{file_data}\n - web  #{photo_data}"]
             else
                 [:ignore_synced,nil]
             end
         end
+        def create(picasa,transform_dir=nil)
 
-        def create(picasa)
+            details = { 
+                title: id,
+                summary: file_data.caption,
+                keywords: file_data.keywords.join(","),
+                timestamp: file_data.timestamp
+            }
+
+            details.merge!(Config.__transform__(file))
+
             @photo = picasa.photo.create(
                 Album.set[file_data.album_id].album.id,
-                :file_path => file,
-                :title => id,
-                :summary => file_data.comment,
-                :keywords => file_data.keywords,
-                :timestamp => file_data.timestamp
+                details
             )
             @photo_data = file_data
             @photo
@@ -190,8 +226,8 @@ module PicasaWS
             @photo = picasa.photo.update(
                 photo.album_id,photo.id,
                 :title => id,
-                :summary => file_data.comment,
-                :keywords => file_data.keywords,
+                :summary => file_data.caption,
+                :keywords => file_data.keywords.join(", "),
                 :timestamp => file_data.timestamp,
                 :album_id => target_album_id
             )
@@ -203,6 +239,22 @@ module PicasaWS
             picasa.photo.delete(photo.album_id,photo.id)
             @photo = nil
             @photo_data = nil
+        end
+
+        def to_fuse(transform_dir)
+            target_album = Album.set[file_data.album_id]
+            album_path = target_album.to_fuse[0]
+            transform_path = "#{transform_dir}/#{album_path}"
+            FileUtils.mkpath(transform_path)
+
+            file_path = Config.__transform__(file) { |ext| "#{transform_path}/#{id}.#{ext}" }[:file_path]
+
+            ext = File.extname(file_path)
+            path = "/#{album_path}/#{id}#{ext}"
+            xattr = {}
+            file_data.each_pair{ |k,v| xattr["user.#{k}"] = v.to_s }
+            puts "#{file_path} #{path}"
+            [ file_path, path, {:xattr => xattr} ]
         end
     end
 end
