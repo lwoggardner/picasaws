@@ -2,11 +2,15 @@ require 'picasa'
 
 module PicasaWS
 
-    def self.client()
-        client = Picasa::Client.new(:user_id => "lwoggardner", :password => ENV["GPASS"])
+    CLIENT_ID = "151560738048.apps.googleusercontent.com"
 
-        client
-    rescue Picasa::ForbiddenError
-        puts "You have the wrong user_id or password."
+    # For installed apps and devices this is (obviously) not intended to be secret
+    CLIENT_SECRET =  "4uQUTwPqBcTdOSlYGYoAl1ma"
+    OAUTH_SCOPE = "http://picasaweb.google.com/data/"
+
+    def self.client(params = {})
+        params = { :user_id => "default" }.merge!(params)
+        Picasa::Client.new(params)
     end
+
 end

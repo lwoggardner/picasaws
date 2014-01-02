@@ -5,6 +5,7 @@ require 'picasaws/optional_gems'
 
 module PicasaWS
 
+    #@!visibility private
     class Decorator < SimpleDelegator
 
         def method_missing(method,*args)
@@ -22,6 +23,8 @@ module PicasaWS
         end
     end
 
+    # Configuration for PicasaWS
+    #
     class Config
 
         class << self
@@ -65,34 +68,90 @@ module PicasaWS
 
         @sync_id = "pws"
 
+        # Configuration block
+        # 
+        # @example
+        #    # This is equivalent to the default configuration
+        #    PicasaWS::Config.configure do
+        #
+        #       album {{ id: dir.basename, title: dir.basename }}
+        #
+        #       photo {{ id: file.basename, timestamp: file.mtime }}
+        #
+        #       video {{ id: ((file.size < 104857600) ? file.basename : nil), timestamp: file.mtime }}
+        #
+        #       transform("image/jpeg","image/tiff") { rmagick_resize() }
+        #
+        #    end
         def self.configure(&block)
             self.class_eval(&block)
         end
 
-        # @yieldreturn [Hash] of album params
-        #   - id: the unique id of this album (default dir.basename)
+        # Set the configuration for albums
+        #
+        # Map information about {#dir} to album id and metadata
+        #
+        # @yieldreturn [Hash] of album configuration params
+        #   - id: the unique id of this album (default {#dir}.basename, nil to skip)
         #   - comment: a descriptive comment for this album (default empty)
-        #   - timestamp: epoch timestamp for this album (default empty)
+        #   - timestamp: epoch timestamp for this album (default dir.mtime}
         def self.album(&block)
             @album_config = self.new(nil,&block)
         end
 
-        # @yieldreturn [Hash] of album params
-        #   - id: the unique id of this album (default dir.basename, nil to skip)
-        #   - comment: a descriptive comment for this album (default empty)
-        #   - timestamp: epoch timestamp for this album (default empty)
+        # Add a configuration for files
+        # 
+        # Map information about {#file} to image id and metadata
+        #
+        # The configurations are applied to files in the order in which they are
+        # defined. If the content type matches the block is called and its results
+        # merged into any previous results (ie last config wins)
+        #
+        # @param [Array<String|Regex>] content_types
+        #    list of mime content types to apply this configuration to
+        #    if none are supplied the regex /image\// is used
+        #
+        # @yieldreturn [Hash] of photo params
+        #   - id: the *unique* id of this photo 
+        #   - timestamp: epoch timestamp for this album 
+        #   - caption: a descriptive comment for this album 
+        #   - keywords: comma separated list of tags or keywords (default empty)
+        #
+        # @example
+        #   # default mapping to match /image\//
+        #   photo {{ id: file.basename, timestamp: file.mtime }}
         def self.photo(*content_types,&block)
             content_types = [/image\//] if content_types.empty?
             @configs.push(*(content_types.collect { |ct| self.new(ct,&block) }))
         end
 
+        # Convenience method to add cofiguration for files with content type
+        # matching /video\//
+        #
+        # See {.photo} 
+        # @example
+        #   # default mapping to match /video\//
+        #   # skip files > 100Mb (not permitted by Picasa)
+        #   video {{ id: ((file.size < 104857600) ? file.basename : nil), timestamp: file.mtime }}
         def self.video(*content_types,&block)
             content_types = [ /video\// ] if content_types.empty?
             photo(*content_types,&block)
         end
 
-        # @yieldreturn [String,Blob] content_type, binary_data
-        # @yieldreturn [String|Pathname] pathname to transformed (or original) file
+        # Add a transform configuration for one or more content types
+        #
+        # The block will operate on {#file} and transform it in some way
+        #
+        # @param [Array<String>] content_types
+        #    one or more exact content type strings that this transform applies to
+        #    the first entry is the output content-type
+        #
+        # @yieldreturn [String] binary data representing the transformed image
+        #    must be of the content-type specified by first entry in content_types
+        #
+        # @example
+        #   # this transform is added by default
+        #   transform("image/jpeg","image/tiff") { rmagick_resize() }
         def self.transform(*content_types,&block)
             raise "at lest one content_type must be supplied" if content_types.empty?
             config = self.new(content_types.first,&block) 
@@ -107,11 +166,11 @@ module PicasaWS
 
         # defaults
 
-        album {{ id: dir.basename, title: dir.basename }}
         @configs = []
-        photo {{ id: file.basename, timestamp: file.mtime }}
-        video {{ id: file.basename, timestamp: file.mtime }}
         @transforms = {}
+        album {{ id: dir.basename, title: dir.basename }}
+        photo {{ id: file.basename, timestamp: file.mtime }}
+        video {{ id: ((file.size < 104857600) ? file.basename : nil), timestamp: file.mtime }}
         transform("image/jpeg","image/tiff") { rmagick_resize() }
 
         attr_reader :content_type
@@ -131,38 +190,59 @@ module PicasaWS
 
         attr_reader :file_path
 
-        def dir
-            file
-        end
-
+        # @return [Pathname] the path being configured
+        #    for albums this will be a directory, for photos/videos a file
         def file
             @file ||= Pathname.new(file_path)
         end
+        alias :dir :file
 
+        # See {http://rubydoc.info/gems/ffi-xattr/Xattr ffi-xattr} gem
+        #
+        # @return [Xattr] the extended attributes for {#file}
         def xattr
             @xattr ||= safe_xattr()
         end
 
+        # See {http://rubydoc.info/gems/exifr exifr} gem
+        #
+        # Applies to content type "image/jpeg" or "image/tiff" only
+        # @return [EXIFR::JPEG|EXIFR::TIFF] exif information about {#file}
         def exif
             @exif ||= safe_exif()
         end
 
+        # See {http://rubydoc.info/gems/xmp/XMP xmp} gem
+        #
+        # Applies to content type "image/jpeg" only
+        # @return [XMP] a proxy for the XMP information about {#file}
+        #     XMP would normally raise exceptions when referencing tags that do not occur in the file
+        #     where this object will return nil
         def xmp
             @xmp ||= safe_xmp()
         end
 
+        # @return [MIME::Type] the mime type for {#file}
         def mime_type
             @mime_type ||= MIME::Types.type_for(file_path).first
         end
 
+        # Applies to video content only
+        # #TODO UNTESTED!!!
+        # @return [FFMPEG::Movie] video information for {#file}
         def ffmpeg
             @ffmpeg ||= safe_ffmpeg()
         end
 
+        # Utility method to join an array of values with a separator, ignoring nils.
+        # @return [String]
         def join(*args,sep)
             args.reject { |x| !x }.uniq.join(sep)
         end
 
+        # Transform method applies to "image/jpeg" or "image/tiff" only
+        # @param [Integer] max_size 
+        # @return [Blob] the transformed image data (always a jpeg)
         def rmagick_resize(max_size=2048)
             OptionalGems.require('RMagick','rmagick') unless defined?(Magick)
 

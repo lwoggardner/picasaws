@@ -1,24 +1,53 @@
-# Rubypicasasync
+# PicasaWS - Picasa Web Sync
 
-TODO: Write a gem description
+Keep Picasaweb albums synchronised with a local directory of photos and videos
 
 ## Installation
 
-Add this line to your application's Gemfile:
-
-    gem 'rubypicasasync'
+    gem install picasaws
 
 And then execute:
 
-    $ bundle
+    $ picasaws
 
-Or install it yourself as:
 
-    $ gem install rubypicasasync
+## Configuration
 
-## Usage
+Some configuration is required to map album and photo metadata from your files
+to picasa. The default configuration just uses filenames and timestamps, and implements a transform to keep images within picasa's free storage size limits
 
-TODO: Write usage instructions here
+See the examples
+
+* etc/exif.conf.rb - obtain title and keyword information from exif and xmp
+* etc/shotwell.conf.rb - obtains information from extended attributes provided by 
+    {http://rubygems.org/gems/shotwellfs shotwellfs}
+
+and the detailled documentation for {PicasaWS::Config}
+
+Configuration is passed to the commands using --config
+
+## Commands
+
+### show
+
+    $ picasaws show
+
+List albums and image information as they will appear in picasa. Useful to test your configuration.
+
+### fuse
+
+    $ picasaws fuse
+
+Starts a FUSE virtual filesystem that lists images in a flattened album structure as it
+will appear in picasa. Metadata that will be available to picasa is available in extended attributes.
+
+### sync
+
+    $ picasaws sync
+
+Uploads your albums to picasa, synchronises metadata, and deletes an albums no longer in your filesystem.  Only albums that were originally uploaded by picasaws are touched.
+
+TODO authentication
 
 ## Contributing
 

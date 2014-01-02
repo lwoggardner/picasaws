@@ -20,10 +20,14 @@ Gem::Specification.new do |gem|
   gem.add_dependency("picasa")
   gem.add_dependency("thor")
   gem.add_dependency("mime-types")
+  gem.add_dependency("awesome_print")
+  gem.add_dependency("oauth2-client")
   gem.add_development_dependency("rmagick")
   gem.add_development_dependency("exifr")
   gem.add_development_dependency("xmp")
   gem.add_development_dependency("rfusefs")
   gem.add_development_dependency("ffi-xattr")
+  gem.add_development_dependency("yard")
+  gem.add_development_dependency("redcarpet")
   
 end
